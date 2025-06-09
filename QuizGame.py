@@ -4,11 +4,12 @@ import tkinter.scrolledtext as sc
 import tkinter.messagebox as mb
 import openpyxl as px
 import sys
-import datetime
 import time
 import pygame # 导入pygame
 import random
 from Exam import *
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
 
 
 # --- 主题颜色定义 ---
@@ -168,12 +169,14 @@ class QuizApp:
         lname = ttk.Label(login_area_frame, text='姓名:')
         self.tname = ttk.Entry(login_area_frame)
         self.blogin = ttk.Button(login_area_frame, text='登录', command=self.login)
+        self.bhistory = ttk.Button(login_area_frame, text='历史成绩', command=self.show_score_history)
 
         lno.grid(column=0, row=0, padx=2, pady=5, sticky=tk.E)
         self.tno.grid(column=1, row=0, padx=2, pady=5, sticky=tk.W)
         lname.grid(column=0, row=1, padx=2, pady=5, sticky=tk.E)
         self.tname.grid(column=1, row=1, padx=2, pady=5, sticky=tk.W)
-        self.blogin.grid(column=0, row=2, columnspan=2, pady=5)
+        self.blogin.grid(column=0, row=2, pady=5)
+        self.bhistory.grid(column=1, row=2, pady=5)
 
     def login(self):
         sno = self.tno.get().strip()
@@ -419,57 +422,56 @@ class QuizApp:
             if not self.is_retry_mode:
                 self.master.after(1000, lambda: self.next_question(q_type))
 
+    def _switch_to_next_tab(self):
+        """检查并切换到下一个可用的题型选项卡，或结束游戏。"""
+        # 顺序检查是否有未完成的题目
+        if self.indexofselect < len(self.rand_select):
+            self.note.tab(1, state='normal')
+            self.note.select(1)
+        elif self.indexofblank < len(self.rand_blank):
+            self.note.tab(2, state='normal')
+            self.note.select(2)
+        elif self.indexofjudge < len(self.rand_judge):
+            self.note.tab(3, state='normal')
+            self.note.select(3)
+        else:
+            # 所有题目都已完成
+            self.game_over()
+
     def next_question(self, q_type):
+        done_with_type = False
         if q_type == 'select':
             self.indexofselect += 1
             if self.indexofselect < len(self.rand_select):
                 self.load_question('select')
             else:
-                if self.is_retry_mode:
-                    mb.showinfo("提示", "选择题重做完成！")
-                else:
-                    mb.showinfo("提示", "选择题已全部完成！")
+                mb.showinfo("提示", "选择题已全部完成！")
                 self.bnext_select.config(state='disabled')
                 self.bconfirm_select.config(state='disabled')
-                # 切换到下一题型 (检查重做列表)
-                if len(self.rand_blank) > 0 and self.indexofblank < len(self.rand_blank):
-                    self.note.tab(2, state='normal')
-                    self.note.select(2)
-                elif len(self.rand_judge) > 0 and self.indexofjudge < len(self.rand_judge):
-                    self.note.tab(3, state='normal')
-                    self.note.select(3)
-                else:
-                    self.game_over()
+                done_with_type = True
         
         elif q_type == 'blank':
             self.indexofblank += 1
             if self.indexofblank < len(self.rand_blank):
                 self.load_question('blank')
             else:
-                if self.is_retry_mode:
-                    mb.showinfo("提示", "填空题重做完成！")
-                else:
-                    mb.showinfo("提示", "填空题已全部完成！")
+                mb.showinfo("提示", "填空题已全部完成！")
                 self.bnext_blank.config(state='disabled')
                 self.bconfirm_blank.config(state='disabled')
-                if len(self.rand_judge) > 0 and self.indexofjudge < len(self.rand_judge):
-                    self.note.tab(3, state='normal')
-                    self.note.select(3)
-                else:
-                    self.game_over()
+                done_with_type = True
 
         elif q_type == 'judge':
             self.indexofjudge += 1
             if self.indexofjudge < len(self.rand_judge):
                 self.load_question('judge')
             else:
-                if self.is_retry_mode:
-                    mb.showinfo("提示", "判断题重做完成！")
-                else:
-                    mb.showinfo("提示", "所有题目已全部完成！")
+                mb.showinfo("提示", "判断题已全部完成！")
                 self.bnext_judge.config(state='disabled')
                 self.bconfirm_judge.config(state='disabled')
-                self.game_over()
+                done_with_type = True
+        
+        if done_with_type:
+            self._switch_to_next_tab()
 
     # --- 填空题页面 ---
     def create_blank_tab(self):
@@ -581,8 +583,20 @@ class QuizApp:
         elif current_tab_index == 3:  # Judge
             if hasattr(self, 'L_qtime_judge'):
                 self.L_qtime_judge.config(text=time_str)
-
+        
         self.question_timer_id = self.master.after(1000, self.update_question_timer)
+
+    def format_time(self, seconds):
+        h = seconds // 3600
+        m = (seconds % 3600) // 60
+        s = seconds % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    def play_warning(self):
+        """Plays a warning sound (if available) and shows a message box."""
+        if self.sound_enabled and self.warning_sound:
+            self.warning_sound.play()
+        mb.showinfo("时间提醒", "测验剩余时间不足两分钟！")
 
     def update_info_label(self, remaining_time_str, is_warning=False):
         sno = self.tno.get()
@@ -620,6 +634,9 @@ class QuizApp:
 
         # ---- 正常模式结束逻辑 ----
         total_possible_score = self.totalSelect + self.totalblank + self.totalJudge
+        # 在显示最终得分前，保存成绩
+        ScoreHistory.add_score(sno, sname, self.totalScore, total_possible_score)
+
         msg = f"测验结束！\n\n"
         msg += f"考生: {sname} ({sno})\n"
         msg += f"最终得分: {self.totalScore} / {total_possible_score}\n\n"
@@ -749,6 +766,56 @@ class QuizApp:
              if entry.cget('state') == 'disabled':
                  self.style.map('TEntry', foreground=[('disabled', theme['disabled_fg'])])
 
+    def show_score_history(self):
+        """显示单个学生的历史成绩图表"""
+        sno = self.tno.get().strip()
+        sname = self.tname.get().strip()
+        
+        # 验证学生信息
+        stu = Stu()
+        if (sno, sname) not in stu.getStu():
+            mb.showerror("错误", "学号或姓名错误，无法查询。")
+            return
+
+        history = ScoreHistory.get_student_history(sno)
+
+        if not history:
+            mb.showinfo("历史成绩", f"未找到 {sname} ({sno}) 的历史成绩记录。")
+            return
+
+        # 创建新窗口显示图表
+        chart_window = tk.Toplevel(self.master)
+        chart_window.title(f"{sname} ({sno}) - 历史成绩")
+        x = (self.master.winfo_screenwidth() - 600) // 2
+        y = (self.master.winfo_screenheight() - 500) // 2
+        chart_window.geometry(f'600x500+{x}+{y}')
+
+        fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
+        
+        scores = [item['score'] for item in history]
+        timestamps = [item['timestamp'][:10] for item in history] # 只取日期部分
+        attempts = range(1, len(scores) + 1)
+
+        ax.plot(attempts, scores, marker='o', linestyle='-')
+        
+        # 在每个点上显示分数
+        for i, score in enumerate(scores):
+            ax.text(attempts[i], score + 0.5, str(score), ha='center')
+
+        ax.set_title(f'{sname} 的历史成绩趋势')
+        ax.set_xlabel('测验次数')
+        ax.set_ylabel('得分')
+        ax.set_xticks(attempts) # 设置x轴刻度为整数次
+        ax.set_xticklabels([f"第{i}次\n{timestamps[i-1]}" for i in attempts], rotation=0, ha='center')
+        ax.grid(True)
+        
+        # 设置y轴范围
+        ax.set_ylim(0, max(100, max(scores) + 10))
+
+        canvas = FigureCanvasTkAgg(fig, master=chart_window)
+        canvas.draw()
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+
 # =================================================================================
 class myTimer:
     def __init__(self, window, label, seconds, app_instance):
@@ -774,7 +841,7 @@ class myTimer:
 
     def update_time(self):
         if self.is_running:
-            elapsed = (datetime.datetime.now() - self.start_time).total_seconds()
+            elapsed = (datetime.now() - self.start_time).total_seconds()
             remaining_time = self.duration - elapsed
             if remaining_time <= 0:
                 self.is_running = False
@@ -792,7 +859,7 @@ class myTimer:
 
     def start(self):
         if not self.is_running:
-            self.start_time = datetime.datetime.now()
+            self.start_time = datetime.now()
             self.is_running = True
         self.update_time()
 

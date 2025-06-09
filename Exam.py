@@ -2,6 +2,8 @@ import openpyxl as px
 import random
 import os
 import sys
+import json
+from datetime import datetime
 
 def get_resource_path(relative_path):
     """获取资源的绝对路径"""
@@ -11,6 +13,59 @@ def get_resource_path(relative_path):
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
+
+SCORE_HISTORY_FILE = 'score_history.json'
+
+class ScoreHistory:
+    @staticmethod
+    def get_history_file_path():
+        """获取成绩历史文件的路径"""
+        return get_resource_path(SCORE_HISTORY_FILE)
+
+    @staticmethod
+    def read_scores():
+        """读取所有学生的分数历史"""
+        path = ScoreHistory.get_history_file_path()
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            # 如果文件不存在或为空/无效，返回一个空字典
+            return {}
+
+    @staticmethod
+    def write_scores(data):
+        """将分数历史数据写入文件"""
+        path = ScoreHistory.get_history_file_path()
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+
+    @staticmethod
+    def add_score(sno, sname, score, total_possible_score):
+        """为指定学生添加一条新的分数记录"""
+        if not sno: return
+        all_scores = ScoreHistory.read_scores()
+        
+        # 使用学号作为唯一标识符
+        student_scores = all_scores.get(sno, [])
+        
+        new_entry = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "sname": sname,
+            "score": score,
+            "total_possible_score": total_possible_score
+        }
+        student_scores.append(new_entry)
+        all_scores[sno] = student_scores
+        
+        ScoreHistory.write_scores(all_scores)
+
+    @staticmethod
+    def get_student_history(sno):
+        """获取单个学生的成绩历史"""
+        if not sno: return []
+        all_scores = ScoreHistory.read_scores()
+        return all_scores.get(sno, [])
 
 # Helper function to safely convert a value to an integer.
 # Handles None, non-numeric strings, etc., by returning 0.
