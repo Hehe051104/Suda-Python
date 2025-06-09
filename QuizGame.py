@@ -7,6 +7,7 @@ import sys
 import datetime
 import time
 import pygame # 导入pygame
+import random
 from Exam import *
 
 
@@ -51,6 +52,12 @@ class QuizApp:
         self.indexofselect = 0
         self.indexofblank = 0
         self.indexofjudge = 0 # 新增判断题索引
+
+        # 新增：用于错题重做
+        self.incorrect_select = []
+        self.incorrect_blank = []
+        self.incorrect_judge = []
+        self.is_retry_mode = False
 
         self.question_start_time = None
         self.question_timer_id = None
@@ -332,6 +339,8 @@ class QuizApp:
             else:
                 self.Lresult_select.config(text=f'回答错误！正确答案: {correct_ans}', foreground='red')
                 if self.sound_enabled: self.incorrect_sound.play()
+                if not self.is_retry_mode:
+                    self.incorrect_select.append(correct_ans_index)
             
             # 显示解析
             self.tans_select.config(state='normal')
@@ -362,6 +371,8 @@ class QuizApp:
             else:
                 self.Lresult_blank.config(text=f'回答错误！', foreground='red')
                 if self.sound_enabled: self.incorrect_sound.play()
+                if not self.is_retry_mode:
+                    self.incorrect_blank.append(correct_ans_index)
 
             self.tans_blank.config(state='normal')
             self.tans_blank.delete('1.0', 'end')
@@ -389,6 +400,8 @@ class QuizApp:
             else:
                 self.Lresult_judge.config(text=f'回答错误！正确答案: {"正确" if correct_ans == "T" else "错误"}', foreground='red')
                 if self.sound_enabled: self.incorrect_sound.play()
+                if not self.is_retry_mode:
+                    self.incorrect_judge.append(correct_ans_index)
 
             self.tans_judge.config(state='normal')
             self.tans_judge.delete('1.0', 'end')
@@ -402,7 +415,9 @@ class QuizApp:
         
         # 回答正确自动跳转
         if correct:
-            self.master.after(1000, lambda: self.next_question(q_type))
+            # 在重做模式下，答对后也等待用户点击下一题，以便查看解析
+            if not self.is_retry_mode:
+                self.master.after(1000, lambda: self.next_question(q_type))
 
     def next_question(self, q_type):
         if q_type == 'select':
@@ -410,14 +425,17 @@ class QuizApp:
             if self.indexofselect < len(self.rand_select):
                 self.load_question('select')
             else:
-                mb.showinfo("提示", "选择题已全部完成！")
+                if self.is_retry_mode:
+                    mb.showinfo("提示", "选择题重做完成！")
+                else:
+                    mb.showinfo("提示", "选择题已全部完成！")
                 self.bnext_select.config(state='disabled')
                 self.bconfirm_select.config(state='disabled')
-                # 切换到下一题型
-                if self.qus_blank:
+                # 切换到下一题型 (检查重做列表)
+                if len(self.rand_blank) > 0 and self.indexofblank < len(self.rand_blank):
                     self.note.tab(2, state='normal')
                     self.note.select(2)
-                elif self.qus_judge:
+                elif len(self.rand_judge) > 0 and self.indexofjudge < len(self.rand_judge):
                     self.note.tab(3, state='normal')
                     self.note.select(3)
                 else:
@@ -428,10 +446,13 @@ class QuizApp:
             if self.indexofblank < len(self.rand_blank):
                 self.load_question('blank')
             else:
-                mb.showinfo("提示", "填空题已全部完成！")
+                if self.is_retry_mode:
+                    mb.showinfo("提示", "填空题重做完成！")
+                else:
+                    mb.showinfo("提示", "填空题已全部完成！")
                 self.bnext_blank.config(state='disabled')
                 self.bconfirm_blank.config(state='disabled')
-                if self.qus_judge:
+                if len(self.rand_judge) > 0 and self.indexofjudge < len(self.rand_judge):
                     self.note.tab(3, state='normal')
                     self.note.select(3)
                 else:
@@ -442,7 +463,10 @@ class QuizApp:
             if self.indexofjudge < len(self.rand_judge):
                 self.load_question('judge')
             else:
-                mb.showinfo("提示", "所有题目已全部完成！")
+                if self.is_retry_mode:
+                    mb.showinfo("提示", "判断题重做完成！")
+                else:
+                    mb.showinfo("提示", "所有题目已全部完成！")
                 self.bnext_judge.config(state='disabled')
                 self.bconfirm_judge.config(state='disabled')
                 self.game_over()
@@ -572,12 +596,29 @@ class QuizApp:
             self.L_info.config(foreground=theme['text_fg'])
 
     def game_over(self):
-        if self.timer: self.timer.stop()
-        
+        # 计时器存在才停止，避免重做时报错
+        if self.timer and not self.is_retry_mode:
+            self.timer.stop()
+
         sno = self.tno.get()
         sname = self.tname.get()
-        
-        # 简化的得分报告
+
+        # 首先处理重做模式的结束逻辑
+        if self.is_retry_mode:
+            total_incorrect = len(self.incorrect_select) + len(self.incorrect_blank) + len(self.incorrect_judge)
+            if total_incorrect > 0:
+                msg = f"本轮重做完成！\n\n你仍有 {total_incorrect} 道错题未完全掌握。"
+                if mb.askyesno("继续重做", f"{msg}\n\n要开始新一轮重做吗？"):
+                    self.start_retry_session()
+                else:
+                    mb.showinfo("再接再厉", "下次再来挑战错题吧！")
+                    self.master.destroy()
+            else:
+                mb.showinfo("恭喜！", "所有错题都已订正！\n\n测验圆满结束。")
+                self.master.destroy()
+            return
+
+        # ---- 正常模式结束逻辑 ----
         total_possible_score = self.totalSelect + self.totalblank + self.totalJudge
         msg = f"测验结束！\n\n"
         msg += f"考生: {sname} ({sno})\n"
@@ -589,9 +630,67 @@ class QuizApp:
             TxtFile.setNewRecord(sno, sname, self.totalScore)
         else:
             msg += f"继续努力！当前最高记录为: {result}"
-
+        
         mb.showinfo('QuizGame - 最终得分', msg)
-        self.master.destroy()
+
+        # 检查是否有错题，并询问是否开始重做
+        total_incorrect = len(self.incorrect_select) + len(self.incorrect_blank) + len(self.incorrect_judge)
+        if total_incorrect > 0:
+            if mb.askyesno("错题重做", f"你共有 {total_incorrect} 道错题，要现在开始重做吗？"):
+                # 在开始重做之前，禁用主计时器
+                if self.timer: self.timer.stop()
+                self.L_info.config(text=f'学号: {sno}  姓名: {sname}  模式: 错题重做  总得分：{self.totalScore}')
+                self.start_retry_session()
+            else:
+                self.master.destroy()
+        else:
+            self.master.destroy()
+
+    def start_retry_session(self):
+        """准备并开始一个错题重做会话"""
+        self.is_retry_mode = True
+        
+        # 使用错题列表作为新的题目来源，并打乱顺序
+        self.rand_select = self.incorrect_select.copy()
+        random.shuffle(self.rand_select)
+        self.rand_blank = self.incorrect_blank.copy()
+        random.shuffle(self.rand_blank)
+        self.rand_judge = self.incorrect_judge.copy()
+        random.shuffle(self.rand_judge)
+
+        # 清空错题记录，为本次重做会话中的新错题做准备
+        self.incorrect_select = []
+        self.incorrect_blank = []
+        self.incorrect_judge = []
+
+        # 重置所有题型索引
+        self.indexofselect = 0
+        self.indexofblank = 0
+        self.indexofjudge = 0
+
+        # 根据可用的错题类型，解锁并跳转到第一个题型
+        # 同时禁用没有错题的题型选项卡
+        has_select = len(self.rand_select) > 0
+        has_blank = len(self.rand_blank) > 0
+        has_judge = len(self.rand_judge) > 0
+
+        self.note.tab(1, state='normal' if has_select else 'disabled')
+        self.note.tab(2, state='normal' if has_blank else 'disabled')
+        self.note.tab(3, state='normal' if has_judge else 'disabled')
+
+        if has_select:
+            self.note.select(1)
+            self.load_question('select')
+        elif has_blank:
+            self.note.select(2)
+            self.load_question('blank')
+        elif has_judge:
+            self.note.select(3)
+            self.load_question('judge')
+        else:
+            # 理论上不应该发生，因为我们是在有错题时才调用此函数
+            mb.showinfo("提示", "没有错题可以重做。")
+            self.game_over() # 调用game_over来正确处理结束逻辑
 
     def toggle_theme(self):
         if self.current_theme == 'light':
